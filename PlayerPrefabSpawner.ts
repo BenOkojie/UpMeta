@@ -12,6 +12,8 @@ import * as hz from "horizon/core";
 export class PlayerPrefabSpawner extends hz.Component<typeof PlayerPrefabSpawner> {
   static propsDefinition = {
     prefabAsset: { type: hz.PropTypes.Asset },
+    // hudAsset: { type: hz.PropTypes.Asset },
+    // liveAsset: { type: hz.PropTypes.Asset },
   } as const;
 
   async start() {
@@ -34,6 +36,11 @@ export class PlayerPrefabSpawner extends hz.Component<typeof PlayerPrefabSpawner
       console.warn("[PlayerPrefabSpawner] prefabAsset not assigned");
       return;
     }
+ 
+    // if (!this.props.hudAsset) {
+    //   console.warn("[PlayerPrefabSpawner] liveasset not assigned");
+    //   return;
+    // }
 
     // Guard against double‑spawning for the same player
 
@@ -42,8 +49,12 @@ export class PlayerPrefabSpawner extends hz.Component<typeof PlayerPrefabSpawner
 
     // world.spawnAsset returns the **root entity**, NOT an array → no destructuring
             let instances: hz.Entity[] | undefined;
+            // let live: hz.Entity[] | undefined;
+            let huddis: hz.Entity[] | undefined;
     try {
       instances = await this.world.spawnAsset(this.props.prefabAsset, spawnPos);
+      // live = await this.world.spawnAsset(this.props.liveAsset, spawnPos);
+      // huddis = await this.world.spawnAsset(this.props.hudAsset, spawnPos);
     } catch (e) {
       console.error("[PlayerPrefabSpawner] spawnAsset threw:", e);
       return;
@@ -53,15 +64,20 @@ export class PlayerPrefabSpawner extends hz.Component<typeof PlayerPrefabSpawner
       return;
     }
     const instance = instances[0];
+    // const liveinstance = live[0];
+    // const hudinstance = huddis[0];
     if (!instance) {
       console.error("[PlayerPrefabSpawner] spawnAsset returned null for", player.name.get());
       return;
     }
 
     instance.owner.set(player); // Local scripts now run on that headset
+    // liveinstance.owner.set(player); // Local scripts now run on that headset
+    // hudinstance.owner.set(player); // Local scripts now run on that headset
     // Optional: instance.setParent(player);
 
     console.log(`[Spawner] Spawned prefab for ${player.name.get()}`);
+    console.log(`[Spawner] Spawned live prefab for ${player.name.get()}`);
   }
 }
 

@@ -1,193 +1,108 @@
 import * as hz from "horizon/core";
 
 /**
- * PowerUpSystem (rev‑3, 2025‑05‑07)
+ * PowerUpSystem (rev‑8, 2025‑05‑08)
  * ---------------------------------
- * Local‑execution component that enables three air abilities gated by the
- * player’s persistent variables in the **skills:** key‑space.
- *   • Air Dash        – Right Primary (tap in mid‑air)
- *   • Hover / Glide   – hold Left Secondary
- *   • Momentum Jump   – Left Primary (super jump based on run charge)
+ * Simple, non‑upgradeable airborne abilities:
+ *   • **Double Jump** – one extra jump while airborne (same key as normal Jump).
+ *   • **Air Dash**    – one horizontal dash per airtime (Right Primary).
  *
- * This revision simplifies lifecycle: we now run **all** setup in `start()`
- * on the client that owns the prefab, after blocking until PV replication is
- * complete.  No more `preStart` owner gymnastics.
+ * No persistent variables, no levels – every player always has exactly *one*
+ * extra jump and *one* dash.  Counters reset each time the player touches
+ * ground.
  */
-
-const PVAR_PREFIX = "skills:";
-const PVAR_AIRDASH   = `${PVAR_PREFIX}airdashlvl`;
-const PVAR_HOVER     = `${PVAR_PREFIX}hoverlvl`;
-const PVAR_MOMENTUM  = `${PVAR_PREFIX}momentumlvl`;
-
 export class PowerUpSystem extends hz.Component<typeof PowerUpSystem> {
-  /* ───── Exposed props ─────────────────────────────────────────────── */
   static propsDefinition = {
-    /* Air dash */
-    baseAirDashForce:  { type: hz.PropTypes.Number, default: 10 },
-    airDashForcePerLvl:{ type: hz.PropTypes.Number, default: 3  },
-    airDashCooldown:   { type: hz.PropTypes.Number, default: 1  },
-
-    /* Hover */
-    baseHoverGravity:  { type: hz.PropTypes.Number, default: 0.4 },
-    hoverGravityPerLvl:{ type: hz.PropTypes.Number, default: 0.1 },
-
-    /* Momentum jump */
-    baseMomentumMax:   { type: hz.PropTypes.Number, default: 4 },
-    momentumMaxPerLvl: { type: hz.PropTypes.Number, default: 2 },
-    momentumChargeRate:{ type: hz.PropTypes.Number, default: 1.2 },
-    momentumDecayRate: { type: hz.PropTypes.Number, default: 2 },
-    baseMomentumJump:  { type: hz.PropTypes.Number, default: 6 },
-    momentumJumpFactor:{ type: hz.PropTypes.Number, default: 2 },
+    dashForce:        { type: hz.PropTypes.Number, default: 12 }, // horizontal burst speed
+    doubleJumpForce:  { type: hz.PropTypes.Number, default: 7  }, // vertical boost for extra jump
   } as const;
 
-  /* ───── Locals ────────────────────────────────────────────────────── */
   private owner!: hz.Player;
-  private elapsed = 0;
-  private lastDash = 0;
+
+  private dashUsed = false;
+  private extraJumpUsed = false;
+  private jumpReleasedSinceGround = false;
 
   private dashBtn?: hz.PlayerInput;
-  private hoverBtn?: hz.PlayerInput;
   private jumpBtn?: hz.PlayerInput;
-
-  private hoverActive = false;
-  private momentum = 0;
-
   private updateSub?: hz.EventSubscription;
 
-  /* ───── Lifecycle ────────────────────────────────────────────────── */
-  async start() {
-    this.owner = this.entity.owner.get();
-    console.log(`[PowerUpSystem] start for ${this.entity.owner.get()}`);
+  start() {
+    this.owner = this.world.getLocalPlayer();
+    console.log(this.owner)
+    console.log("[PowerUp] start for", this.owner.name.get());
+    this.bindInputs();
 
-    await this.waitForPVReady();
-    this.initControls();
-  }
-
-  /** Block until PVs are replicated to the client */
-  private async waitForPVReady(): Promise<void> {
-    const store = this.world.persistentStorage;
-    while (
-      store.getPlayerVariable<number>(this.owner, PVAR_AIRDASH) == null ||
-      store.getPlayerVariable<number>(this.owner, PVAR_HOVER)   == null ||
-      store.getPlayerVariable<number>(this.owner, PVAR_MOMENTUM)== null
-    ) {
-      await new Promise<void>(r => this.async.setTimeout(() => r(), 0.05));
-    }
-  }
-
-  /* ───── Input & update binding ───────────────────────────────────── */
-  private initControls() {
-    /* Inputs */
-    this.dashBtn = hz.PlayerControls.connectLocalInput(
-      hz.PlayerInputAction.RightPrimary,
-      hz.ButtonIcon.Airstrike,
-      this,
-    );
-    this.hoverBtn = hz.PlayerControls.connectLocalInput(
-      hz.PlayerInputAction.LeftSecondary,
-      hz.ButtonIcon.EagleEye,
-      this,
-    );
-    this.jumpBtn = hz.PlayerControls.connectLocalInput(
-      hz.PlayerInputAction.LeftPrimary,
-      hz.ButtonIcon.RocketJump,
-      this,
-    );
-
-    this.dashBtn.registerCallback((_, pressed) => pressed && this.tryAirDash());
-    this.hoverBtn.registerCallback((_, pressed) => this.toggleHover(pressed));
-    this.jumpBtn.registerCallback((_, pressed) => pressed && this.fireMomentumJump());
-
-    /* Frame loop */
-    this.updateSub = this.connectLocalBroadcastEvent(hz.World.onUpdate, ({ deltaTime }) => {
-      this.elapsed += deltaTime;
-      this.updateMomentum(deltaTime);
-      this.applyHoverDrag();
-      this.resetOnGround();
+    // Reset counters on landing
+    this.updateSub = this.connectLocalBroadcastEvent(hz.World.onUpdate, () => {
+      if (this.owner.isGrounded.get()) {
+        this.dashUsed = false;
+        this.extraJumpUsed = false;
+        this.jumpReleasedSinceGround = false;
+      }
     });
   }
 
-  /* ───── Helpers ───────────────────────────────────────────────────── */
-  private getLvl(key: string): number {
-    const val = this.world.persistentStorage.getPlayerVariable<number>(this.owner, key);
-    console.log("val" + " = " + val);  
-    return typeof val === "number" ? val : 0;
+  /* ───── Input wiring ─────────────────────────────────────── */
+  private bindInputs() {
+    // Dash – Right Primary
+    this.dashBtn = hz.PlayerControls.connectLocalInput(
+      hz.PlayerInputAction.RightPrimary,
+      hz.ButtonIcon.Airstrike,
+      this
+    );
+    this.dashBtn.registerCallback((_, pressed) => pressed && this.tryDash());
+
+    // Jump – same key as normal jump
+    this.jumpBtn = hz.PlayerControls.connectLocalInput(
+      hz.PlayerInputAction.Jump,
+      hz.ButtonIcon.Jump,
+      this
+    );
+    this.jumpBtn.registerCallback((_, pressed) => this.onJumpInput(pressed));
   }
 
-  /* ───── Air Dash ─────────────────────────────────────────────────── */
-  private tryAirDash() {
-    if (this.owner.isGrounded.get()) return;
+  /* ───── Dash ─────────────────────────────────────────────── */
+  private tryDash() {
+    if (this.owner.isGrounded.get()) return; // no dash from ground
+    if (this.dashUsed) return;
 
-    const lvl = this.getLvl(PVAR_AIRDASH);
-    console.log(`[PowerUpSystem] tryAirDash: ${lvl}`);
-    if (lvl <= 0) return;
-    if (this.elapsed - this.lastDash < this.props.airDashCooldown) return;
-
-    const force = this.props.baseAirDashForce + (lvl - 1) * this.props.airDashForcePerLvl;
-    const dir = new hz.Vec3(this.owner.forward.get().x, 0, this.owner.forward.get().z).normalize();
-    const vel = dir.mul(force);
-    vel.y = this.owner.velocity.get().y; // preserve vertical
+    const dir = new hz.Vec3(
+      this.owner.forward.get().x,
+      0,
+      this.owner.forward.get().z
+    ).normalize();
+    const vel = dir.mul(this.props.dashForce);
+    vel.y = this.owner.velocity.get().y; // keep current vertical velocity
     this.owner.velocity.set(vel);
-    this.lastDash = this.elapsed;
+
+    this.dashUsed = true;
   }
 
-  /* ───── Hover ────────────────────────────────────────────────────── */
-  private toggleHover(pressed: boolean) {
-    const lvl = this.getLvl(PVAR_HOVER);
-    if (lvl <= 0) return;
+  /* ───── Double Jump ─────────────────────────────────────── */
+  private onJumpInput(pressed: boolean) {
+    // We only care about presses/releases while airborne
+    if (!pressed) {
+      // button released
+      if (!this.owner.isGrounded.get()) this.jumpReleasedSinceGround = true;
+      return;
+    }
 
-    this.hoverActive = pressed;
-    const g = pressed
-      ? Math.max(0.05, this.props.baseHoverGravity - (lvl - 1) * this.props.hoverGravityPerLvl)
-      : 1;
-    this.owner.gravity.set(g);
-  }
+    // pressed === true here
+    if (this.owner.isGrounded.get()) return; // normal jump handled by engine
+    if (!this.jumpReleasedSinceGround) return; // need distinct second press
+    if (this.extraJumpUsed) return; // only one extra jump
 
-  private applyHoverDrag() {
-    if (!this.hoverActive) return;
     const v = this.owner.velocity.get();
-    if (v.y < 0) {
-      this.owner.velocity.set(new hz.Vec3(v.x, v.y * 0.5, v.z));
-    }
+    this.owner.velocity.set(new hz.Vec3(v.x, this.props.doubleJumpForce, v.z));
+
+    this.extraJumpUsed = true;
+    this.jumpReleasedSinceGround = false; // consume
   }
 
-  /* ───── Momentum Jump ───────────────────────────────────────────── */
-  private updateMomentum(dt: number) {
-    const lvl = this.getLvl(PVAR_MOMENTUM);
-    if (lvl <= 0) return;
-
-    const horiz = new hz.Vec3(this.owner.velocity.get().x, 0, this.owner.velocity.get().z).magnitude();
-    const max = this.props.baseMomentumMax + (lvl - 1) * this.props.momentumMaxPerLvl;
-
-    if (horiz > 0.1) {
-      this.momentum = Math.min(max, this.momentum + horiz * this.props.momentumChargeRate * dt);
-    } else {
-      this.momentum = Math.max(0, this.momentum - this.props.momentumDecayRate * dt);
-    }
-  }
-
-  private fireMomentumJump() {
-    const lvl = this.getLvl(PVAR_MOMENTUM);
-    if (lvl <= 0 || this.momentum <= 0.1) return;
-
-    const jump = this.props.baseMomentumJump + this.momentum * this.props.momentumJumpFactor;
-    const cur = this.owner.velocity.get();
-    this.owner.velocity.set(new hz.Vec3(cur.x, jump, cur.z));
-    this.momentum = 0;
-  }
-
-  /* ───── Ground reset ─────────────────────────────────────────────── */
-  private resetOnGround() {
-    if (this.owner.isGrounded.get()) {
-      this.hoverActive = false;
-      this.owner.gravity.set(1);
-    }
-  }
-
-  /* ───── Cleanup ──────────────────────────────────────────────────── */
+  /* ───── Cleanup ─────────────────────────────────────────── */
   dispose() {
     this.dashBtn?.disconnect();
-    this.hoverBtn?.disconnect();
     this.jumpBtn?.disconnect();
     this.updateSub?.disconnect();
   }
