@@ -1,0 +1,25 @@
+import { PhysicsForceMode } from 'horizon/core';
+import { Component, PropTypes, Vec3, PhysicalEntity, CodeBlockEvents, Player } from 'horizon/core';
+
+class BouncyBlock extends Component<typeof BouncyBlock> {
+  static propsDefinition = {
+    bounceForce: { type: PropTypes.Number, default: 10 },
+  };
+
+  start() {
+    console.log("test");
+    this.connectCodeBlockEvent(this.entity, CodeBlockEvents.OnPlayerCollision, (player: Player, collisionAt: Vec3, normal: Vec3, relativeVelocity: Vec3) => {
+      const physicalEntity = this.entity.as(PhysicalEntity)!;
+      console.error("test");
+      if (physicalEntity) {
+        // Apply a force upward to simulate a bounce
+        physicalEntity.applyForceAtPosition(Vec3.down.mul(this.props.bounceForce!), collisionAt, PhysicsForceMode.Impulse);
+        console.log(`BouncyBlock: Player ${player.id} collided with block at ${collisionAt.toString()} with normal ${normal.toString()}`);
+      }else{
+        console.error('BouncyBlock: No PhysicalEntity found on the entity.');
+      }
+    });
+  }
+}
+
+Component.register(BouncyBlock);
