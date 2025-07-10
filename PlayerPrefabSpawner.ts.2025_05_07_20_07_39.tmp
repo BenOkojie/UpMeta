@@ -1,0 +1,60 @@
+import * as hz from "horizon/core";
+
+/**
+ * PlayerPrefabSpawner – **server‑side** helper that gives each joining player
+ * a locally‑owned prefab containing PowerUpSystem, HUD, etc.
+ *
+ * ▸ Execution mode: **Default** (runs on the simulation authority).
+ * ▸ Drag this script onto an always‑active world entity (e.g. _Managers).
+ * ▸ In the Inspector, choose the **PlayerLocalPrefab** asset (the one you
+ *   saved with PowerUpSystem + PowerUpHUD set to Local).
+ */
+export class PlayerPrefabSpawner extends hz.Component<typeof PlayerPrefabSpawner> {
+  static propsDefinition = {
+    prefabAsset: { type: hz.PropTypes.Asset }, // assign in‑editor
+  } as const;
+
+  async start() {
+    // Handle players already in‑world when the map loads
+    for (const p of this.world.getPlayers()) {
+      console.log(
+        `[PlayerPrefabSpawner] spawning prefab for existing player ${p.name.get()}`
+      );
+      await this.spawnFor(p);
+    }
+
+    // Handle players who join later
+    this.connectCodeBlockEvent(
+      this.entity,
+      hz.CodeBlockEvents.OnPlayerEnterWorld,
+      (player: hz.Player) => this.spawnFor(player)
+    );
+  }
+
+  /** Spawns the prefab and transfers ownership so Local scripts run only on that client */
+  private async spawnFor(player: hz.Player): Promise<void> {
+    if (!this.props.prefabAsset) {
+      console.warn("[PlayerPrefabSpawner] prefabAsset not assigned");
+      return;
+    }
+
+    // Spawn at the player's position (slightly below so it isn't in their head)
+    const pos = player.position.get();
+    console.log(
+      `[PlayerPrefabSpawner] spawning prefab for ${player.name.get()} at ${pos.toString()}`
+    );
+    console.log(this.props.prefabAsset.toString());
+    const [instance] = await this.world.spawnAsset(this.props.prefabAsset, pos);
+    console.log(instance)
+    // Give ownership to that player so all *Local* components run on their headset
+    instance.owner.set(player);
+    console.log(
+      `[PlayerPrefabSpawner] spawned prefab for ${player.name.get()} at ${pos.toString()}`
+    );
+
+    // Optional: parent so it follows the avatar. Commented out by default.
+    // instance.setParent(player);
+  }
+}
+
+hz.Component.register(PlayerPrefabSpawner);

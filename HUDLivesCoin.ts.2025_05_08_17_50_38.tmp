@@ -1,0 +1,87 @@
+import * as hz from "horizon/core";
+import { UIComponent, View, Text, Image, Binding } from "horizon/ui";
+
+/**
+ * HUDLivesCoinsOverlay (rev‑6, Screen Overlay style)
+ * -------------------------------------------------
+ * Screen‑overlay HUD (non‑interactive) that shows:
+ *   ♥ x3   🪙 42  in the top‑right corner.
+ *
+ *  • Attach this script to **a Custom UI gizmo** whose *Display Mode* is set to
+ *    **Screen Overlay** (just like Station10 examples).
+ *  • The gizmo can live inside your PlayerLocalPrefab *or* free‑floating;
+ *    screen overlays automatically render only for the local player.
+ *
+ *  Properties:
+ *    heartIcon – Asset (optional PNG) for the heart image.
+ *    coinIcon  – Asset (optional PNG) for the coin image.
+ */
+export class HUDLivesCoin extends UIComponent<typeof HUDLivesCoin> {
+  static propsDefinition = {
+    heartIcon: { type: hz.PropTypes.Asset },
+    coinIcon:  { type: hz.PropTypes.Asset },
+  } as const;
+
+  /* Bindings wired into the UI */
+  private livesTxt = new Binding<string>("x1");
+  private coinTxt  = new Binding<string>("0");
+
+  /* Interval id */
+  private updateTimer: number | undefined;
+
+  /** Build the overlay. Mirrors style of Station10_BuildInfo sample. */
+  initializeUI() {
+    return View({
+      children: [
+        // Heart icon
+        Image({
+          source: this.props.heartIcon,
+          style: { width: 32, height: 32, marginRight: 4 },
+        }),
+        Text({ text: this.livesTxt, style: { fontFamily: "Roboto", fontWeight: "600", color: "white", fontSize: 22, marginRight: 12 } }),
+        // Coin icon
+        Image({
+          source: this.props.coinIcon,
+          style: { width: 32, height: 32, marginRight: 4 },
+        }),
+        Text({ text: this.coinTxt, style: { fontFamily: "Roboto", fontWeight: "600", color: "white", fontSize: 22 } }),
+      ],
+      style: {
+        position: "absolute",
+        flexDirection: "row",
+        alignItems: "center",
+        right: 16,
+        top: 16,
+        padding: 6,
+        backgroundColor: new hz.Color(0, 0, 0),
+        borderRadius: 6,
+      },
+    });
+  }
+
+  start() {
+    // Update bindings every 250 ms
+    this.updateTimer = this.async.setInterval(() => this.refresh(), 0.25);
+    this.refresh();
+  }
+
+  private refresh() {
+    const store  = this.world.persistentStorage;
+    const player = this.world.getLocalPlayer();
+    if (!player) return;
+
+    // Lives: runtime variable written by LivesManager
+    const lives = store.getPlayerVariable<number>(player, "runtime:livesLeft") ?? 1;
+    this.livesTxt.set(`x${lives}`);
+
+    // Coins: persistent variable
+    const coins = store.getPlayerVariable<number>(player, "skills:coin") ?? 0;
+    this.coinTxt.set(`${coins}`);
+  }
+
+  dispose() {
+    if (this.updateTimer) this.async.clearInterval(this.updateTimer);
+  }
+}
+
+hz.Component.register(HUDLivesCoin);
