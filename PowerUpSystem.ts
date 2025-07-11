@@ -1,37 +1,70 @@
 import * as hz from "horizon/core";
+import { CollectibleTracker } from "./CollectibleTracker";   // adjust path if needed
 
-/**
- * PowerUpSystem (rev‑8, 2025‑05‑08)
- * ---------------------------------
- * Simple, non‑upgradeable airborne abilities:
- *   • **Double Jump** – one extra jump while airborne (same key as normal Jump).
- *   • **Air Dash**    – one horizontal dash per airtime (Right Primary).
- *
- * No persistent variables, no levels – every player always has exactly *one*
- * extra jump and *one* dash.  Counters reset each time the player touches
- * ground.
- */
+/* persistent-var helpers */
+const PV_GRP   = "shop";
+const SKILL_KEYS = {
+  AirDash:     "AirDash",
+  DoubleJump:  "DoubleJump",
+  Speed:       "Speed",
+  Jump:        "Jump",
+  Lives:        "Lives"
+} as const;
+type SkillKey = keyof typeof SKILL_KEYS;
+
+/* tuning defaults */
+const STEP = 5;                          // +5 force per level step
+
 export class PowerUpSystem extends hz.Component<typeof PowerUpSystem> {
   static propsDefinition = {
-    dashForce:        { type: hz.PropTypes.Number, default: 12 }, // horizontal burst speed
-    doubleJumpForce:  { type: hz.PropTypes.Number, default: 7  }, // vertical boost for extra jump
+    baseDash:        { type: hz.PropTypes.Number, default: 1 }, // multiplied by level*STEP
+    baseDoubleJump:  { type: hz.PropTypes.Number, default: 1 },
+    baseLocomotion:  { type: hz.PropTypes.Number, default: 1 }, // speed boost per level*STEP
+    baseJumpSpeed:   { type: hz.PropTypes.Number, default: 1 }, // jump speed per level*STEP
   } as const;
 
   private owner!: hz.Player;
 
+  /* ability state */
   private dashUsed = false;
   private extraJumpUsed = false;
   private jumpReleasedSinceGround = false;
+
+  /* live skill levels */
+  private levels: Record<SkillKey, number> = {
+    AirDash: 0,
+    DoubleJump: 0,
+    Speed: 0,
+    Jump: 0,
+    Lives:0,
+  };
+
+  /* cached forces */
+  private get dashForce()       { return this.props.baseDash       * this.levels.AirDash    * STEP; }
+  private get doubleJumpForce() { return this.props.baseDoubleJump * this.levels.DoubleJump * STEP; }
 
   private dashBtn?: hz.PlayerInput;
   private jumpBtn?: hz.PlayerInput;
   private updateSub?: hz.EventSubscription;
 
+  /* ───────── Startup ───────── */
   start() {
     this.owner = this.world.getLocalPlayer();
     this.bindInputs();
+    console.warn("bruh")
+    /* 1️⃣  initial load */
+    this.applySnapshot(CollectibleTracker.Instance?.getSnapshot(this.owner));
 
-    // Reset counters on landing
+    /* 2️⃣  listen for tracker broadcasts */
+    this.connectLocalBroadcastEvent(
+      CollectibleTracker.playerSkillDataLoadedEvent,
+      ({ player, skills }) => {
+        if (player === this.owner) this.applySnapshot({ skills });
+        console.error("sent and recieved")
+      }
+    );
+
+    /* 3️⃣  reset counters on ground contact */
     this.updateSub = this.connectLocalBroadcastEvent(hz.World.onUpdate, () => {
       if (this.owner.isGrounded.get()) {
         this.dashUsed = false;
@@ -41,9 +74,28 @@ export class PowerUpSystem extends hz.Component<typeof PowerUpSystem> {
     });
   }
 
-  /* ───── Input wiring ─────────────────────────────────────── */
+  /* apply snapshot of skills */
+  private applySnapshot(snap?: { coins?: number; skills: Record<string, number> }) {
+    if (!snap) return;
+    for (const k in SKILL_KEYS) {
+      const key = k as SkillKey;
+      this.levels[key] = snap.skills[key] ?? 0;
+      console.error(key)
+      console.error(this.levels[key])
+    }
+
+    /* speed + jump height */
+    this.owner.locomotionSpeed.set(
+      1 + this.props.baseLocomotion * this.levels.Speed * STEP
+    );
+    this.owner.jumpSpeed.set(
+      1 + this.props.baseJumpSpeed * this.levels.Jump * STEP
+    );
+  }
+
+  /* ───────── Input wiring ───────── */
   private bindInputs() {
-    // Dash – Right Primary
+    /* Dash – Right Primary */
     this.dashBtn = hz.PlayerControls.connectLocalInput(
       hz.PlayerInputAction.RightPrimary,
       hz.ButtonIcon.Airstrike,
@@ -51,7 +103,7 @@ export class PowerUpSystem extends hz.Component<typeof PowerUpSystem> {
     );
     this.dashBtn.registerCallback((_, pressed) => pressed && this.tryDash());
 
-    // Jump – same key as normal jump
+    /* Jump – same key as normal jump */
     this.jumpBtn = hz.PlayerControls.connectLocalInput(
       hz.PlayerInputAction.Jump,
       hz.ButtonIcon.Jump,
@@ -60,9 +112,10 @@ export class PowerUpSystem extends hz.Component<typeof PowerUpSystem> {
     this.jumpBtn.registerCallback((_, pressed) => this.onJumpInput(pressed));
   }
 
-  /* ───── Dash ─────────────────────────────────────────────── */
+  /* ───────── Dash ───────── */
   private tryDash() {
-    if (this.owner.isGrounded.get()) return; // no dash from ground
+    if (this.levels.AirDash === 0) return;      // locked
+    if (this.owner.isGrounded.get()) return;
     if (this.dashUsed) return;
 
     const dir = new hz.Vec3(
@@ -70,35 +123,35 @@ export class PowerUpSystem extends hz.Component<typeof PowerUpSystem> {
       0,
       this.owner.forward.get().z
     ).normalize();
-    const vel = dir.mul(this.props.dashForce);
-    vel.y = this.owner.velocity.get().y; // keep current vertical velocity
+    const vel = dir.mul(this.dashForce);
+    vel.y = this.owner.velocity.get().y; // keep vertical
     this.owner.velocity.set(vel);
-
     this.dashUsed = true;
   }
 
-  /* ───── Double Jump ─────────────────────────────────────── */
+  /* ───────── Double Jump ───────── */
   private onJumpInput(pressed: boolean) {
-    // We only care about presses/releases while airborne
     if (!pressed) {
-      // button released
       if (!this.owner.isGrounded.get()) this.jumpReleasedSinceGround = true;
       return;
     }
 
-    // pressed === true here
-    if (this.owner.isGrounded.get()) return; // normal jump handled by engine
-    if (!this.jumpReleasedSinceGround) return; // need distinct second press
-    if (this.extraJumpUsed) return; // only one extra jump
+    if (this.levels.DoubleJump === 0){
+      console.warn("uh ohhhhh no double jump ")
+       return;   // locked
+    }
+    if (this.owner.isGrounded.get()) return;
+    if (!this.jumpReleasedSinceGround) return;
+    if (this.extraJumpUsed) return;
 
     const v = this.owner.velocity.get();
-    this.owner.velocity.set(new hz.Vec3(v.x, this.props.doubleJumpForce, v.z));
-
+    this.owner.velocity.set(new hz.Vec3(v.x, this.doubleJumpForce, v.z));
+    console.warn(this.doubleJumpForce)
     this.extraJumpUsed = true;
-    this.jumpReleasedSinceGround = false; // consume
+    this.jumpReleasedSinceGround = false;
   }
 
-  /* ───── Cleanup ─────────────────────────────────────────── */
+  /* ───────── Cleanup ───────── */
   dispose() {
     this.dashBtn?.disconnect();
     this.jumpBtn?.disconnect();
