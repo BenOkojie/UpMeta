@@ -50,17 +50,26 @@ export class PowerUpSystem extends hz.Component<typeof PowerUpSystem> {
   /* ───────── Startup ───────── */
   start() {
     this.owner = this.world.getLocalPlayer();
+    if (!this.owner) return;  
     this.bindInputs();
     console.warn("bruh")
     /* 1️⃣  initial load */
-    this.applySnapshot(CollectibleTracker.Instance?.getSnapshot(this.owner));
+    const snap = CollectibleTracker.Instance?.getSnapshot(this.owner)
+    console.log(this.owner)
+    this.applySnapshot(snap);
 
     /* 2️⃣  listen for tracker broadcasts */
-    this.connectLocalBroadcastEvent(
+    this.connectNetworkBroadcastEvent(
       CollectibleTracker.playerSkillDataLoadedEvent,
-      ({ player, skills }) => {
-        if (player === this.owner) this.applySnapshot({ skills });
+      ({ player,coins, skills }) => {
+        console.error("not gdugdibjjbejvvjejvvjefnow")
+        if (player === this.owner){
+          this.applySnapshot({ skills });
         console.error("sent and recieved")
+        } 
+        else{
+          console.error("not now")
+        }
       }
     );
 
@@ -76,7 +85,10 @@ export class PowerUpSystem extends hz.Component<typeof PowerUpSystem> {
 
   /* apply snapshot of skills */
   private applySnapshot(snap?: { coins?: number; skills: Record<string, number> }) {
+    console.log("snapshot trying to do something") 
+    console.log(snap)
     if (!snap) return;
+    
     for (const k in SKILL_KEYS) {
       const key = k as SkillKey;
       this.levels[key] = snap.skills[key] ?? 0;

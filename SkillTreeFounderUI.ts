@@ -87,7 +87,7 @@ export class SkillTreeFounderUI extends ui.UIComponent<UIProps> {
         for (const k of SKILL_KEYS) {
           this.world.persistentStorage.setPlayerVariable(player, `${PV_GRP}:${k}`, this.lvlVal[k]);
         }
-        this.sendLocalBroadcastEvent(
+        this.sendNetworkBroadcastEvent(
           CollectibleTracker.playerSkillDataLoadedEvent,
           { player, coins: this.coinVal, skills: { ...this.lvlVal } }
         );
@@ -102,7 +102,7 @@ export class SkillTreeFounderUI extends ui.UIComponent<UIProps> {
   /* listen for tracker broadcasts */
   start() {
     const me = this.world.getLocalPlayer();
-    this.connectLocalBroadcastEvent(
+    this.connectNetworkBroadcastEvent(
       CollectibleTracker.playerSkillDataLoadedEvent,
       ({ player, coins, skills }) => {
         if (player !== me) return;
@@ -155,6 +155,14 @@ export class SkillTreeFounderUI extends ui.UIComponent<UIProps> {
       const newLvl = this.lvlVal[key] + 1;
       this.lvlVal[key] = newLvl;
       lvlB.set(newLvl);
+      this.sendNetworkBroadcastEvent(
+    CollectibleTracker.playerSkillDataLoadedEvent,
+    {
+      player: this.world.getLocalPlayer(),
+      coins:  this.coinVal,
+      skills: { ...this.lvlVal },   // spread so every key is included
+    }
+  );
     };
 
     return ui.View({

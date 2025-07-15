@@ -17,7 +17,7 @@
       want the data immediately at start-up.                                   */
 
 import {
-  Component, Player, LocalEvent, World
+  Component, Player, LocalEvent, World, NetworkEvent
 } from "horizon/core";
 
 /* ────────── persistent-variable keys ────────── */
@@ -42,7 +42,7 @@ export class CollectibleTracker extends Component<typeof CollectibleTracker> {
   }>("CollectibleCountUpdated");
 
   /* NEW: full snapshot (coins + skills) */
-  static playerSkillDataLoadedEvent = new LocalEvent<{
+  static playerSkillDataLoadedEvent = new NetworkEvent<{
     player: Player;
     coins: number;
     skills: Record<SkillKey, number>;
@@ -71,6 +71,7 @@ export class CollectibleTracker extends Component<typeof CollectibleTracker> {
   /* ─── load one player’s data ─── */
   private loadSavedData(player: Player) {
     /* coins */
+    console.error("calling saved")
     const coins = this.loadOrInit(player, COIN_KEY, 0);
     this.coinsBy.set(player.id, coins);
 
@@ -87,7 +88,9 @@ export class CollectibleTracker extends Component<typeof CollectibleTracker> {
         CollectibleTracker.collectedCountUpdatedEvent,
         { player, count: coins }
       );
-      this.sendLocalBroadcastEvent(
+      console.log(skills)
+      console.log(player)
+      this.sendNetworkBroadcastEvent(
         CollectibleTracker.playerSkillDataLoadedEvent,
         { player, coins, skills }
       );
@@ -95,7 +98,7 @@ export class CollectibleTracker extends Component<typeof CollectibleTracker> {
   }
   /* ─── coin pickup handler ─── */
   private onCoinCollected(player: Player) {
-    const newCoins = (this.coinsBy.get(player.id) ?? 0) + 1;
+    const newCoins = (this.coinsBy.get(player.id) ?? 0) + 10;
     this.coinsBy.set(player.id, newCoins);
     this.world.persistentStorage.setPlayerVariable(player, COIN_KEY, newCoins);
 
@@ -107,7 +110,7 @@ export class CollectibleTracker extends Component<typeof CollectibleTracker> {
 
     /* resend full snapshot (ensures skill HUD sees updated coin text) */
     const skills = this.skillLevels.get(player.id)!;
-    this.sendLocalBroadcastEvent(
+    this.sendNetworkBroadcastEvent(
       CollectibleTracker.playerSkillDataLoadedEvent,
       { player, coins: newCoins, skills }
     );
@@ -134,6 +137,8 @@ export class CollectibleTracker extends Component<typeof CollectibleTracker> {
 
   /* ─── public helper for UIs ─── */
   getSnapshot(player: Player) {
+    console.error("loading saved data")
+    this.loadSavedData(player);
     return {
       coins:  this.coinsBy.get(player.id) ?? 0,
       skills: this.skillLevels.get(player.id) ??
